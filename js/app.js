@@ -29,6 +29,36 @@ function renderBook(book) {
     );
 }
 
+function sanitizeFilenamePart(value) {
+    return value
+        .trim()
+        .replace(/[\\/:*?"<>|]/g, "")
+        .replace(/\s+/g, " ")
+        .slice(0, 120);
+}
+
+function getBookJsonFilename(book, sourceFilename) {
+    const sourceNameWithoutExt = sourceFilename.replace(/\.[^.]+$/, "");
+    const preferredName = sanitizeFilenamePart(book.title || "");
+    const fallbackName = sanitizeFilenamePart(sourceNameWithoutExt || "book");
+    return `${preferredName || fallbackName || "book"}.json`;
+}
+
+function downloadBookJson(book, sourceFilename) {
+    const jsonContent = JSON.stringify(book, null, 2);
+    const blob = new Blob([jsonContent], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = getBookJsonFilename(book, sourceFilename);
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+
+    URL.revokeObjectURL(url);
+}
+
 async function handleFile(file) {
     if (!file || !file.name.toLowerCase().endsWith(".epub")) {
         status.textContent = "Please drop a valid .epub file.";
@@ -40,7 +70,8 @@ async function handleFile(file) {
 
     try {
         const book = await parseEpubFile(file);
-        status.textContent = `Parsed “${book.title || file.name}” by ${book.author || "Unknown author"}.`;
+        downloadBookJson(book, file.name);
+        status.textContent = `Parsed “${book.title || file.name}” by ${book.author || "Unknown author"}. Downloaded JSON.`;
         renderBook(book);
         window.latestParsedBook = book;
     } catch (error) {
