@@ -1,26 +1,27 @@
-export class Book{
-    constructor(title, author, paragraphs){
+export class Book {
+    constructor(title = "", author = "", paragraphs = []) {
         this.title = title;
         this.author = author;
         this.paragraphs = paragraphs;
     }
 }
 
-class Paragraph{
-    constructor(alignment = "left", words){
+export class Paragraph {
+    constructor(alignment = "left", words = []) {
         this.alignment = alignment;
         this.words = words;
     }
 }
 
-class Word{
-    constructor(characters){
+export class Word {
+    constructor(characters = [], paragraphIndex = -1) {
         this.characters = characters;
+        this.paragraphIndex = paragraphIndex;
     }
 }
 
-class Character{
-    constructor(character, bold = false, italic = false, underline = false){
+export class Character {
+    constructor(character, bold = false, italic = false, underline = false) {
         this.character = character;
         this.bold = bold;
         this.italic = italic;
