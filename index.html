@@ -4,58 +4,12 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>EPUB Parser</title>
-        <style>
-            body {
-                font-family: Arial, sans-serif;
-                margin: 2rem;
-                background: #f8fafc;
-                color: #0f172a;
-            }
-
-            #dropZone {
-                border: 2px dashed #64748b;
-                border-radius: 12px;
-                padding: 2rem;
-                text-align: center;
-                background: #ffffff;
-                cursor: pointer;
-                transition: all 0.2s ease;
-            }
-
-            #dropZone.hover {
-                border-color: #2563eb;
-                background: #eff6ff;
-            }
-
-            #dropZone.busy {
-                opacity: 0.7;
-                pointer-events: none;
-            }
-
-            #status {
-                margin-top: 1rem;
-                font-weight: 600;
-            }
-
-            #output {
-                margin-top: 1rem;
-                white-space: pre-wrap;
-                background: #0f172a;
-                color: #e2e8f0;
-                padding: 1rem;
-                border-radius: 8px;
-                max-height: 380px;
-                overflow: auto;
-            }
-        </style>
     </head>
     <body>
         <h1>EPUB Parser</h1>
         <div id="dropZone">Drop an EPUB file here (or click to select)</div>
-        <p id="status">Waiting for a file.</p>
-        <pre id="output"></pre>
-
-        <script src="./js/jszip.min.js"></script>
-        <script type="module" src="./js/app.js"></script>
+    
+        <script src="/js/jszip.min.js"></script>
+        <script src="/js/main.js"></script>
     </body>
 </html>
