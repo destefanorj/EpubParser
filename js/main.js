@@ -84,23 +84,45 @@ async function handleEpub(file){
     let author = "unknown";
 
     // EPUB metadata lives here
-    const metadata = opfDoc.querySelector("metadata");
+    const metadataNode = opfDoc.querySelector("metadata");
 
-    if (metadata) {
-        const titleNode =
-            metadata.querySelector("title") ||
-            metadata.querySelector("dc\\:title");
+    const metadataResult = {
+        title: "book",
+        creator: "unknown",
+        publisher: null,
+        date: null,
+        language: null,
+        identifier: null,
+        description: null,
+        subject: []
+    };
 
-        const authorNode =
-            metadata.querySelector("creator") ||
-            metadata.querySelector("dc\\:creator");
-
-        if (titleNode) title = titleNode.textContent.trim();
-        if (authorNode) author = authorNode.textContent.trim();
+    function getText(node, selectors) {
+        for (const sel of selectors) {
+            const el = node.querySelector(sel);
+            if (el && el.textContent) {
+                return el.textContent.trim();
+            }
+        }
+        return null;
     }
 
-    console.log("Title:", title);
-    console.log("Author:", author);
+    if (metadataNode) {
+        metadataResult.title = getText(metadataNode, ["title", "dc\\:title"]) || "book";
+        metadataResult.creator = getText(metadataNode, ["creator", "dc\\:creator"]) || "unknown";
+        metadataResult.publisher = getText(metadataNode, ["publisher", "dc\\:publisher"]);
+        metadataResult.date = getText(metadataNode, ["date", "dc\\:date"]);
+        metadataResult.language = getText(metadataNode, ["language", "dc\\:language"]);
+        metadataResult.identifier = getText(metadataNode, ["identifier", "dc\\:identifier"]);
+        metadataResult.description = getText(metadataNode, ["description", "dc\\:description"]);
+
+        metadataNode.querySelectorAll("subject, dc\\:subject").forEach(el => {
+            const val = el.textContent.trim();
+            if (val) metadataResult.subject.push(val);
+        });
+    }
+
+    console.log("Metadata:", metadataResult);
 
     //get manifest
     const manifest = {};
@@ -158,8 +180,7 @@ async function handleEpub(file){
     }
 
     const result = buildBardoFromDocument(chapterDoc);
-    result.title = title;
-    result.author = author;
+    result.metadata = metadataResult;
 
     console.log("Paragraphs:", result.paragraphs.length);
     console.log("Spans:", result.spans.length);
@@ -171,7 +192,7 @@ async function handleEpub(file){
     const buffer = writeBardo(result);
     verifyBardo(buffer);
 
-    const safeTitle = sanitizeFilename(result.title || "book");
+    const safeTitle = sanitizeFilename(result.metadata?.title || "book");
     downloadBardo(buffer, safeTitle);
 }
 
@@ -309,8 +330,63 @@ function writeBardo(result) {
     const encoder = new TextEncoder();
     const textBytes = encoder.encode(result.text);
 
+    // Build metadata buffer
+
+    function buildMetadataBuffer(metadata){
+        const fields = [];
+
+        function add(type, value){
+            if(value && value.length > 0){
+                const bytes = encoder.encode(value);
+                fields.push({type, bytes});
+            }
+        }
+
+        // Field types
+        add(1, metadata?.title);
+        add(2, metadata?.creator);
+        add(3, metadata?.publisher);
+        add(4, metadata?.date);
+        add(5, metadata?.language);
+        add(6, metadata?.identifier);
+        add(7, metadata?.description);
+
+        if (metadata?.subject) {
+            for (const s of metadata.subject) {
+                add(8, s);
+            }
+        }
+
+        let size = 2;   // field count
+
+        for(const f of fields){
+            size += 1 + 4 + f.bytes.length;
+        }
+
+        const buffer = new ArrayBuffer(size);
+        const view = new DataView(buffer);
+
+        let offset = 0;
+
+        view.setUint16(offset, fields.length, true);
+        offset += 2;
+
+        for (const f of fields) {
+            view.setUint8(offset, f.type); offset += 1;
+            view.setUint32(offset, f.bytes.length, true); offset += 4;
+
+            new Uint8Array(buffer, offset, f.bytes.length).set(f.bytes);
+            offset += f.bytes.length;
+        }
+
+        return buffer;
+    }
+
+    const metadataBuffer = buildMetadataBuffer(result.metadata || {});
+    const metadataSize = metadataBuffer.byteLength;
+
     // ---- Layout constants (must match loader later) ----
-    const HEADER_SIZE = 32;
+    const HEADER_SIZE = 48;
     const STYLE_SIZE = 4;
     const PARAGRAPH_SIZE = 12;
     const SPAN_SIZE = 12;
@@ -320,8 +396,18 @@ function writeBardo(result) {
     const spanCount = result.spans.length;
     const textSize = textBytes.length;
 
+    // Offsets
+
+    const metadataOffset = HEADER_SIZE;
+
+    const styleOffset = metadataOffset + metadataSize;
+    const paragraphOffset = styleOffset + styleCount * STYLE_SIZE;
+    const spanOffset = paragraphOffset + paragraphCount * PARAGRAPH_SIZE;
+    const textOffset = spanOffset + spanCount * SPAN_SIZE;
+
     const bufferSize =
         HEADER_SIZE +
+        metadataSize +
         (styleCount * STYLE_SIZE) +
         (paragraphCount * PARAGRAPH_SIZE) +
         (spanCount * SPAN_SIZE) +
@@ -357,15 +443,17 @@ function writeBardo(result) {
     view.setUint32(offset, textSize, true);
     offset += 4;
 
-    const styleOffset = HEADER_SIZE;
-    const paragraphOffset = styleOffset + styleCount * STYLE_SIZE;
-    const spanOffset = paragraphOffset + paragraphCount * PARAGRAPH_SIZE;
-    const textOffset = spanOffset + spanCount * SPAN_SIZE;
+    view.setUint32(offset, metadataSize, true);
+    offset += 4;
 
     view.setUint32(offset, styleOffset, true); offset += 4;
     view.setUint32(offset, paragraphOffset, true); offset += 4;
     view.setUint32(offset, spanOffset, true); offset += 4;
     view.setUint32(offset, textOffset, true); offset += 4;
+    view.setUint32(offset, metadataOffset, true); offset += 4;
+
+    // Metadata
+    new Uint8Array(buffer, metadataOffset).set(new Uint8Array(metadataBuffer));
 
     // =========================
     // STYLES
