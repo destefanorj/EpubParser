@@ -19,6 +19,31 @@ const dropZone = document.getElementById("dropZone");
     });
 });
 
+function detectFileType(file){
+    const name = file.name.toLowerCase();
+
+    if(name.endsWith(".epub")) return "epub";
+    if(name.endsWith(".json")) return "msdf-json";
+
+    return "unknown";
+}
+
+async function handleAsset(file) {
+    const type = detectFileType(file);
+
+    switch (type) {
+        case "epub":
+            return await handleEpub(file);
+
+        case "msdf-json":
+            return await handleMsdfJson(file);
+
+        default:
+            console.warn("Unsupported file type:", file.name);
+            alert("Unsupported file type");
+    }
+}
+
 //Handle file drop
 dropZone.addEventListener("drop", async(e) => {
     const files = e.dataTransfer.files;
@@ -27,14 +52,9 @@ dropZone.addEventListener("drop", async(e) => {
 
     const file = files[0];
 
-    if(!file.name.endsWith(".epub")){
-        alert("Please drop a valid EPUB file.");
-        return;
-    }
+    console.log("Dropped file:", file.name);
 
-    console.log("Loaded EPUB: ", file.name);
-
-    await handleEpub(file);
+    await handleAsset(file);
 });
 
 async function handleEpub(file){
@@ -608,4 +628,141 @@ function sanitizeFilename(name) {
         .replace(/[\\/:*?"<>|]/g, "")
         .replace(/\s+/g, " ")
         .trim();
+}
+
+//---------------------------//
+//---------MSDF JSON---------//
+//---------------------------//
+
+class BinaryWriter{
+    constructor(initialSize = 1024 * 1024){
+        this.buffer = new ArrayBuffer(initialSize);
+        this.view = new DataView(this.buffer);
+        this.offset = 0;
+    }
+
+    ensure(size){
+        if(this.offset + size < this.buffer.byteLength) return;
+
+        let newSize = this.buffer.byteLength * 2;
+        while(newSize < this.offset + size){
+            newSize *= 2;
+        }
+
+        const newBuffer = new ArrayBuffer(newSize);
+        new Uint8Array(newBuffer).set(new Uint8Array(this.buffer));
+        this.buffer = newBuffer;
+        this.view = new DataView(this.buffer);
+    }
+
+    writeUint8(v){
+        this.ensure(1);
+        this.view.setUint8(this.offset, v);
+        this.offset += 1;
+    }
+
+    writeUint32(v){
+        this.ensure(4);
+        this.view.setUint32(this.offset, v, true);
+        this.offset += 4;
+    }
+
+    writeFloat32(v){
+        this.ensure(4);
+        this.view.setFloat32(this.offset, v, true);
+        this.offset += 4;
+    }
+}
+
+async function convertMsdfJsonToBinary(file){
+    const text = await file.text();
+    const data = JSON.parse(text);
+
+    const writer = new BinaryWriter();
+
+    // Header
+    writer.writeUint32(0x4D534446); //MSDF
+    writer.writeUint32(1);          //version
+
+    const glyphs = data.glyphs;
+    const kerning = data.kerning || [];
+
+    writer.writeUint32(glyphs.length);
+    writer.writeUint32(kerning.length);
+
+    // Atlas metadata
+    const atlas = data.atlas;
+
+    writer.writeUint32(atlas.width);
+    writer.writeUint32(atlas.height);
+    writer.writeFloat32(atlas.distanceRange);
+
+    // Glyphs
+    for (let g of glyphs) {
+        writer.writeUint32(g.unicode);
+        writer.writeFloat32(g.advance);
+
+        // detect glyph type
+        let flags = 0;
+
+        const hasPlane = g.planeBounds != null;
+        const hasAtlas = g.atlasBounds != null;
+
+        // whitespace (space, NBSP, tab-like glyphs)
+        if (!hasAtlas && g.advance > 0) {
+            flags = 1;
+        }
+
+        // missing glyph (no geometry AND no meaningful advance fallback)
+        if (!hasAtlas && !hasPlane) {
+            flags = 2;
+        }
+
+        writer.writeUint8(flags);
+
+        // always write bounds (even if zeroed)
+        writeBounds(writer, g.planeBounds);
+        writeBounds(writer, g.atlasBounds);
+    }
+
+    // Kerning
+    for (let k of kerning) {
+        writer.writeUint32(k.first);
+        writer.writeUint32(k.second);
+        writer.writeFloat32(k.amount);
+    }
+
+    // trim buffer
+    return writer.buffer.slice(0, writer.offset);
+}
+
+async function handleMsdfJson(file){
+    const binary = await convertMsdfJsonToBinary(file);
+
+    const blob = new Blob([binary], {type: "application/octet-stream"});
+
+    const url = URL.createObjectURL(blob);
+
+    console.log("MSDF binary generated:", url);
+
+    // optional: trigger download for debugging
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name.replace(".json", ".msdfb");
+    a.click();
+}
+
+function writeBounds(writer, b) {
+    if (!b) {
+        writer.writeFloat32(0);
+        writer.writeFloat32(0);
+        writer.writeFloat32(0);
+        writer.writeFloat32(0);
+        return;
+    }
+
+    writer.writeFloat32(b.left);
+    writer.writeFloat32(b.bottom);
+    writer.writeFloat32(b.right);
+    writer.writeFloat32(b.top);
 }
