@@ -722,7 +722,12 @@ async function convertMsdfJsonToBinary(file){
 
         // always write bounds (even if zeroed)
         writeBounds(writer, g.planeBounds);
-        writeBounds(writer, g.atlasBounds);
+        writeNormalizedAtlasBounds(
+            writer,
+            g.atlasBounds,
+            atlas.width,
+            atlas.height
+        );
     }
 
     // Kerning
@@ -765,4 +770,26 @@ function writeBounds(writer, b) {
     writer.writeFloat32(b.bottom);
     writer.writeFloat32(b.right);
     writer.writeFloat32(b.top);
+}
+
+function writeNormalizedAtlasBounds(writer, b, atlasWidth, atlasHeight) {
+    if (!b) {
+        writer.writeFloat32(0);
+        writer.writeFloat32(0);
+        writer.writeFloat32(0);
+        writer.writeFloat32(0);
+        return;
+    }
+
+    const left   = b.left   / atlasWidth;
+    const right  = b.right  / atlasWidth;
+
+    // Flip Y
+    const top    = 1.0 - (b.top    / atlasHeight);
+    const bottom = 1.0 - (b.bottom / atlasHeight);
+
+    writer.writeFloat32(left);
+    writer.writeFloat32(bottom);
+    writer.writeFloat32(right);
+    writer.writeFloat32(top);
 }
