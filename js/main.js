@@ -176,7 +176,13 @@ async function handleEpub(file){
     // Find first VALID chapter
     const opfDir = opfPath.substring(0, opfPath.lastIndexOf("/") + 1);
 
-    let chapterDoc = null;
+
+    const finalResult = {
+        text: "", 
+        spans: [],
+        paragraphs: [],
+        styles: [{flags: 0}]
+    };
 
     for (let i = 0; i < spine.length; i++) {
         const path = opfDir + spine[i];
@@ -187,99 +193,206 @@ async function handleEpub(file){
 
         const doc = parser.parseFromString(text, "text/html");
 
-        // Check if it has actual text
-        if (doc.body && doc.body.textContent.trim().length > 0) {
-            chapterDoc = doc;
-            console.log("Using chapter:", path);
-            break;
+        if (!doc.body || doc.body.textContent.trim().length === 0){
+        continue;
         }
+
+        console.log("Parsing:", path);
+        
+        const partial = buildBardoFromDocument(doc);
+
+        appendBardoResult(finalResult, partial);
     }
 
-    if (!chapterDoc) {
-        throw new Error("No valid chapter found");
-    }
+    
+    finalResult.metadata = metadataResult;
 
-    const result = buildBardoFromDocument(chapterDoc);
-    result.metadata = metadataResult;
+    console.log("Paragraphs:", finalResult.paragraphs.length);
+    console.log("Spans:", finalResult.spans.length);
+    console.log("Text length:", finalResult.text.length);
 
-    console.log("Paragraphs:", result.paragraphs.length);
-    console.log("Spans:", result.spans.length);
-    console.log("Text length:", result.text.length);
-    console.log("Styles:", result.styles);
+    const buffer = writeBardo(finalResult);
 
-    console.log("Preview:", result.text.substring(0, 500));
-
-    const buffer = writeBardo(result);
     verifyBardo(buffer);
 
-    const safeTitle = sanitizeFilename(result.metadata?.title || "book");
+    const safeTitle =
+        sanitizeFilename(finalResult.metadata?.title || "book");
+
     downloadBardo(buffer, safeTitle);
 }
 
-function buildBardoFromDocument(doc) {
+function appendBardoResult(target, source)
+{
+    const encoder = new TextEncoder();
 
+    const textByteOffset =
+        encoder.encode(target.text).length;
+
+    const spanOffset =
+        target.spans.length;
+
+    // append text
+    if (
+        target.text.length > 0 &&
+        !target.text.endsWith("\n")
+    )
+    {
+        target.text += "\n";
+    }
+
+    target.text += source.text;
+
+    // remap styles
+    const styleMap = new Map();
+
+    for (let i = 0; i < source.styles.length; i++)
+    {
+        const sourceStyle = source.styles[i];
+
+        let targetIndex =
+            target.styles.findIndex(
+                s => s.flags === sourceStyle.flags
+            );
+
+        if (targetIndex === -1)
+        {
+            target.styles.push(sourceStyle);
+
+            targetIndex = target.styles.length - 1;
+        }
+
+        styleMap.set(i, targetIndex);
+    }
+
+    // append spans
+    for (const span of source.spans)
+    {
+        target.spans.push({
+            textOffset:
+                span.textOffset + textByteOffset,
+
+            textLength:
+                span.textLength,
+
+            styleIndex:
+                styleMap.get(span.styleIndex)
+        });
+    }
+
+    // append paragraphs
+    for (const paragraph of source.paragraphs)
+    {
+        target.paragraphs.push({
+            spanStart:
+                paragraph.spanStart + spanOffset,
+
+            spanCount:
+                paragraph.spanCount,
+
+            alignment:
+                paragraph.alignment
+        });
+    }
+}
+
+function buildBardoFromDocument(doc)
+{
     let fullText = "";
+
+    const encoder = new TextEncoder();
+
     const spans = [];
     const paragraphs = [];
-    const styles = [{flags: 0}];
+    const styles = [{ flags: 0 }];
 
     let currentParagraph = null;
+    let lastParagraphElement = null;
 
-    function startParagraph() {
+    function startParagraph()
+    {
         currentParagraph = {
             spanStart: spans.length,
             spanCount: 0,
             alignment: 0
         };
+
         paragraphs.push(currentParagraph);
     }
 
-    function addSpan(text, styleIndex) {
-        const offset = fullText.length;
+    function getUtf8ByteLength(str)
+    {
+        return encoder.encode(str).length;
+    }
+
+    function addSpan(text, styleIndex)
+    {
+        const offset = getUtf8ByteLength(fullText);
 
         fullText += text;
 
+        const length = getUtf8ByteLength(text);
+
         spans.push({
             textOffset: offset,
-            textLength: text.length,
+            textLength: length,
             styleIndex: styleIndex
         });
 
-        if (currentParagraph) {
+        if (currentParagraph)
+        {
             currentParagraph.spanCount++;
         }
     }
 
-    function isParagraphElement(node) {
-        if (!node || node.nodeType !== 1) return false;
+    function isParagraphElement(node)
+    {
+        if (!node || node.nodeType !== 1)
+            return false;
 
         const tag = node.tagName.toLowerCase();
 
-        return ["p", "h1", "h2", "h3", "h4", "h5", "h6"].includes(tag);
+        return [
+            "p",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "blockquote",
+            "li"
+        ].includes(tag);
     }
 
-    function getStyleIndex(node){
+    function getStyleIndex(node)
+    {
         let isBold = false;
         let isItalic = false;
 
         let current = node.parentNode;
-        
-        while(current && current.nodeType === 1){
+
+        while (current && current.nodeType === 1)
+        {
             const tag = current.tagName.toLowerCase();
 
-            if(tag === "b" || tag === "strong") isBold = true;
-            if(tag === "i" || tag === "em") isItalic = true;
+            if (tag === "b" || tag === "strong")
+                isBold = true;
+
+            if (tag === "i" || tag === "em")
+                isItalic = true;
 
             current = current.parentNode;
         }
 
-        const flags = (isBold ? 1 : 0) | (isItalic ? 2 : 0);
+        const flags =
+            (isBold ? 1 : 0) |
+            (isItalic ? 2 : 0);
 
-        //check if style already exists
-        let index = styles.findIndex(s=> s.flags === flags);
+        let index = styles.findIndex(s => s.flags === flags);
 
-        if(index === -1) {
-            styles.push({flags});
+        if (index === -1)
+        {
+            styles.push({ flags });
             index = styles.length - 1;
         }
 
@@ -294,34 +407,72 @@ function buildBardoFromDocument(doc) {
 
     let node;
 
-    let lastParagraphElement = null;
-
-    while (node = walker.nextNode()) {
-
+    while ((node = walker.nextNode()))
+    {
         let text = node.nodeValue;
-        if (!text) continue;
 
-        text = text.replace(/\s+/g, " ").trim();
-        if (text.length === 0) continue;
+        if (!text)
+            continue;
 
-        // Find nearest block-level ancestor
+        // normalize internal whitespace only
+        text = text.replace(/\s+/g, " ");
+
+        // skip pure whitespace nodes
+        if (text.trim().length === 0)
+            continue;
+
+        // locate owning paragraph element
         let parent = node.parentNode;
-        while (parent && parent !== doc.body && !isParagraphElement(parent)) {
+
+        while (
+            parent &&
+            parent !== doc.body &&
+            !isParagraphElement(parent)
+        )
+        {
             parent = parent.parentNode;
         }
 
-        // Start paragraph ONLY when block changes
-        if (parent !== lastParagraphElement) {
+        // new paragraph
+        if (parent !== lastParagraphElement)
+        {
             startParagraph();
+
+            // separate paragraphs cleanly
+            if (
+                fullText.length > 0 &&
+                !fullText.endsWith("\n")
+            )
+            {
+                fullText += "\n";
+            }
+
             lastParagraphElement = parent;
         }
+        else
+        {
+            // insert space between adjacent text nodes if needed
+            const prevChar =
+                fullText.length > 0
+                    ? fullText[fullText.length - 1]
+                    : "";
 
-        // Add spacing
-        if (fullText.length > 0 && !fullText.endsWith(" ")) {
-            fullText += " ";
+            const nextChar = text[0];
+
+            const needsSpace =
+                prevChar &&
+                !/\s/.test(prevChar) &&
+                nextChar &&
+                !/\s/.test(nextChar);
+
+            if (needsSpace)
+            {
+                fullText += " ";
+            }
         }
 
         const styleIndex = getStyleIndex(node);
+
         addSpan(text, styleIndex);
     }
 
